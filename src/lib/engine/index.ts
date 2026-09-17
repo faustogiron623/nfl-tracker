@@ -236,7 +236,7 @@ async function buildPropPicks(
               propOdds,
               game.home_team,
               game.away_team,
-              (l) => l.player_name === displayName && l.market_type === 'player_pass_yards'
+              (l) => l.player_name === displayName && l.market_type === 'player_passing_yards'
             );
             if (line?.line !== undefined) {
               maybeAddYardageProp(picks, 'pass_yards', displayName, team, game.game_id, line, proj, opponent);
@@ -252,7 +252,7 @@ async function buildPropPicks(
               propOdds,
               game.home_team,
               game.away_team,
-              (l) => l.player_name === displayName && l.market_type === 'player_rush_yards'
+              (l) => l.player_name === displayName && l.market_type === 'player_rushing_yards'
             );
             if (line?.line !== undefined) {
               maybeAddYardageProp(picks, 'rush_yards', displayName, team, game.game_id, line, proj, opponent);
@@ -264,7 +264,7 @@ async function buildPropPicks(
               propOdds,
               game.home_team,
               game.away_team,
-              (l) => l.player_name === displayName && l.market_type === 'player_anytime_td'
+              (l) => l.player_name === displayName && l.market_type === 'anytime_touchdown_scorer'
             );
             if (line) maybeAddTdProp(picks, displayName, team, game.game_id, line, tdProj);
           }
@@ -278,7 +278,7 @@ async function buildPropPicks(
               propOdds,
               game.home_team,
               game.away_team,
-              (l) => l.player_name === displayName && l.market_type === 'player_reception_yards'
+              (l) => l.player_name === displayName && l.market_type === 'player_receiving_yards'
             );
             if (line?.line !== undefined) {
               maybeAddYardageProp(picks, 'rec_yards', displayName, team, game.game_id, line, proj, opponent);
@@ -290,7 +290,7 @@ async function buildPropPicks(
               propOdds,
               game.home_team,
               game.away_team,
-              (l) => l.player_name === displayName && l.market_type === 'player_anytime_td'
+              (l) => l.player_name === displayName && l.market_type === 'anytime_touchdown_scorer'
             );
             if (line) maybeAddTdProp(picks, displayName, team, game.game_id, line, tdProj);
           }

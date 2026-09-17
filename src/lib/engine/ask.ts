@@ -152,7 +152,7 @@ export async function answerMatchupQuestion(question: string, now: Date = new Da
 
         if (pos === 'QB') {
           const proj = projectPassYards(seasonStats, pid, week, opponent, defFactors, wx.passMult);
-          const line = propOdds.find((l) => l.player_name === name && l.market_type === 'player_pass_yards');
+          const line = propOdds.find((l) => l.player_name === name && l.market_type === 'player_passing_yards');
           if (proj && line?.line !== undefined) {
             const p = probOverLine(proj, line.line);
             const ev = evaluateEdge(p, 0.5);
@@ -163,7 +163,7 @@ export async function answerMatchupQuestion(question: string, now: Date = new Da
         }
         if (pos === 'RB') {
           const tdProj = projectAnytimeTd(seasonStats, pid, week, 'rush');
-          const line = propOdds.find((l) => l.player_name === name && l.market_type === 'player_anytime_td');
+          const line = propOdds.find((l) => l.player_name === name && l.market_type === 'anytime_touchdown_scorer');
           if (tdProj?.lambda !== undefined && line) {
             const p = poissonProbAtLeastOne(tdProj.lambda);
             const ev = evaluateEdge(p, 0.5);

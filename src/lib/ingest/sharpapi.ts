@@ -1,12 +1,14 @@
 // Ingesta de odds vía SharpAPI (https://sharpapi.io).
 //
-// OJO — riesgo conocido documentado para Fausto: la documentación pública
-// de SharpAPI confirma moneyline/spread/totals en el tier gratis, pero NO
-// confirma player props en ningún tier de forma explícita. Este módulo está
-// escrito de forma defensiva: si el endpoint de props devuelve vacío, 4xx,
-// o un shape inesperado, lanza SharpApiPropsUnavailableError en vez de
-// fallar en cascada, y el motor de cálculo (engine) cae a modo
-// "solo equipos" avisando al usuario en vez de romperse.
+// ACTUALIZACIÓN 17-sep-2026: confirmado en vivo con la key real de Fausto
+// que moneyline Y props SÍ están disponibles en el tier gratis (12 req/min,
+// DraftKings+FanDuel). El primer intento falló por nombres de market_type
+// mal adivinados (ver PROP_MARKET_KEYS abajo), no por un límite del plan.
+// Este módulo sigue siendo defensivo por si acaso: si props devuelve vacío
+// o un 403/404 (plan realmente sin acceso), lanza
+// SharpApiPropsUnavailableError y el motor cae a modo "solo equipos" en vez
+// de romper todo el análisis — pero un 400 (parámetro mal formado) SÍ se
+// deja propagar como error real, para que se note y se corrija.
 
 const BASE_URL = 'https://api.sharpapi.io/api/v1';
 
@@ -44,7 +46,7 @@ async function sharpApiGet<T>(path: string, params: Record<string, string>): Pro
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new SharpApiError(`SharpAPI ${path} -> HTTP ${res.status}: ${body.slice(0, 300)}`, res.status);
+    throw new SharpApiError(`SharpAPI ${path} -> HTTP ${res.status}: ${body.slice(0, 1000)}`, res.status);
   }
   return res.json() as Promise<T>;
 }
@@ -80,19 +82,20 @@ export async function fetchMoneylineOdds(): Promise<SharpApiOddsLine[]> {
   return res.data ?? [];
 }
 
-// Mapeo de nuestras categorías de prop a los market_type keys que
-// (según la documentación de marketing, no confirmado en la referencia
-// técnica) SharpAPI usaría. Si estos keys no existen en tu plan, la
-// llamada trae 0 resultados o un 4xx, y se maneja como "no disponible".
+// Mapeo de nuestras categorías de prop a los market_type keys reales de
+// SharpAPI. TODOS confirmados el 17-sep-2026 contra GET /api/v1/markets
+// (filtrando por "football" en el campo sports — SharpAPI usa "football"
+// para NFL y "soccer" para fútbol soccer, están separados). Cero
+// adivinanzas: esta es la lista textual que devuelve ese endpoint.
 const PROP_MARKET_KEYS: Record<string, string> = {
-  pass_yards: 'player_pass_yards',
-  pass_attempts: 'player_pass_attempts',
-  rush_yards: 'player_rush_yards',
-  rush_attempts: 'player_rush_attempts',
-  anytime_td: 'player_anytime_td',
-  rec_yards: 'player_reception_yards',
+  pass_yards: 'player_passing_yards',
+  pass_attempts: 'player_passing_attempts',
+  rush_yards: 'player_rushing_yards',
+  rush_attempts: 'player_rushing_attempts',
+  anytime_td: 'anytime_touchdown_scorer', // sin prefijo "player_", ojo
+  rec_yards: 'player_receiving_yards',
   receptions: 'player_receptions',
-  fg_made: 'player_field_goals',
+  fg_made: 'player_field_goals_made',
 };
 
 export type PropCategory = keyof typeof PROP_MARKET_KEYS;
@@ -129,25 +132,27 @@ export async function fetchPlayerProps(categories: PropCategory[]): Promise<Shar
 export async function testSharpApiConnection(): Promise<{
   moneylineOk: boolean;
   propsOk: boolean;
-  error?: string;
+  moneylineError?: string;
+  propsError?: string;
 }> {
   let moneylineOk = false;
   let propsOk = false;
-  let error: string | undefined;
+  let moneylineError: string | undefined;
+  let propsError: string | undefined;
 
   try {
     const lines = await fetchMoneylineOdds();
     moneylineOk = lines.length > 0;
   } catch (e) {
-    error = e instanceof Error ? e.message : String(e);
+    moneylineError = e instanceof Error ? e.message : String(e);
   }
 
   try {
     const props = await fetchPlayerProps(['pass_yards']);
     propsOk = props.length > 0;
-  } catch {
-    propsOk = false;
+  } catch (e) {
+    propsError = e instanceof Error ? e.message : String(e);
   }
 
-  return { moneylineOk, propsOk, error };
+  return { moneylineOk, propsOk, moneylineError, propsError };
 }
