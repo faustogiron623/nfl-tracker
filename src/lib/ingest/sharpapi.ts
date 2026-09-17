@@ -51,25 +51,50 @@ async function sharpApiGet<T>(path: string, params: Record<string, string>): Pro
   return res.json() as Promise<T>;
 }
 
+export interface SharpApiTeamInfo {
+  id: string;
+  numerical_id: number;
+  name: string; // nombre completo, ej. "Buffalo Bills"
+  abbreviation: string; // código real, ej. "BUF" — esto SÍ coincide con nflverse
+}
+
 export interface SharpApiOddsLine {
   id: string;
   sportsbook: string; // 'draftkings' | 'fanduel'
   sport: string;
+  league?: string; // 'nfl' | 'ncaaf' | ... — OJO: sport='football' agrupa NFL y NCAAF juntos, hay que filtrar por league
   event_id: string;
-  home_team: string;
-  away_team: string;
-  commence_time: string;
+  home_team: string; // ⚠️ nombre completo del equipo ("Buffalo Bills"), NO el código — no usar para matching contra nflverse
+  away_team: string; // ⚠️ idem
+  commence_time?: string;
+  event_start_time?: string;
   market_type: string; // 'moneyline' | 'spread' | 'total' | prop market keys
-  selection: string;
+  selection: string; // ⚠️ formato INCONSISTENTE entre casas ("BUF Bills" en DraftKings vs "Buffalo Bills" en FanDuel) — no usar para saber quién es el pick
+  team_side?: 'home' | 'away'; // ✅ campo confiable para saber si esta línea es la del local o la visita
   player_name?: string;
   line?: number;
   odds_american: number;
   odds_decimal?: number;
   odds_probability?: number;
+  home?: SharpApiTeamInfo; // ✅ home.abbreviation es lo que hay que comparar contra game.home_team (nflverse)
+  away?: SharpApiTeamInfo; // ✅ away.abbreviation idem
 }
 
 interface SharpApiOddsResponse {
   data: SharpApiOddsLine[];
+}
+
+/**
+ * Confirmado en vivo (17-sep-2026): el parámetro sport='NFL' NO filtra por
+ * liga — SharpAPI agrupa NFL y NCAAF bajo sport='football' y solo el campo
+ * `league` en cada línea distingue cuál es cuál. Esto importa porque hay
+ * colisiones de código de equipo entre ligas (ej. "BUF" = Buffalo Bills en
+ * NFL, pero también Buffalo Bulls en NCAAF). Filtramos acá del lado del
+ * cliente en vez de adivinar un parámetro de query nuevo (`league=nfl`) sin
+ * confirmar — ya nos pasó factura una vez adivinar nombres de parámetros.
+ */
+function onlyNfl(lines: SharpApiOddsLine[]): SharpApiOddsLine[] {
+  return lines.filter((l) => !l.league || l.league === 'nfl');
 }
 
 /** Moneyline de NFL para DraftKings + FanDuel. Confirmado por docs: disponible en free tier. */
@@ -79,7 +104,7 @@ export async function fetchMoneylineOdds(): Promise<SharpApiOddsLine[]> {
     sportsbooks: 'draftkings,fanduel',
     market_type: 'moneyline',
   });
-  return res.data ?? [];
+  return onlyNfl(res.data ?? []);
 }
 
 // Mapeo de nuestras categorías de prop a los market_type keys reales de
@@ -113,7 +138,7 @@ export async function fetchPlayerProps(categories: PropCategory[]): Promise<Shar
       sportsbooks: 'draftkings,fanduel',
       market_type: marketTypes,
     });
-    const lines = res.data ?? [];
+    const lines = onlyNfl(res.data ?? []);
     if (lines.length === 0) {
       throw new SharpApiPropsUnavailableError(
         'SharpAPI devolvió 0 líneas de props — probablemente no incluidas en tu plan actual.'

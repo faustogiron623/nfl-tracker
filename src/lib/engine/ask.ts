@@ -98,12 +98,19 @@ export async function answerMatchupQuestion(question: string, now: Date = new Da
   const { adjustedEdge, breakdown } = applySituationalAdjustments(baseEdge, ctx);
   const modelHomeWinProb = edgeToHomeWinProb(adjustedEdge);
 
-  const homeLine = moneylineOdds.find(
-    (l) => ((l.home_team === game.home_team && l.away_team === game.away_team) || (l.home_team === game.away_team && l.away_team === game.home_team)) && l.selection === game.home_team
+  // l.home_team/l.away_team traen nombre completo ("Buffalo Bills"), no el
+  // código de nflverse; y l.selection cambia de formato según la casa
+  // ("BUF Bills" vs "Buffalo Bills"). Comparamos contra home.abbreviation/
+  // away.abbreviation (código real) y usamos team_side (consistente entre
+  // casas) para saber cuál línea es la del local y cuál la de la visita.
+  const gameLines = moneylineOdds.filter(
+    (l) =>
+      l.market_type === 'moneyline' &&
+      ((l.home?.abbreviation === game.home_team && l.away?.abbreviation === game.away_team) ||
+        (l.home?.abbreviation === game.away_team && l.away?.abbreviation === game.home_team))
   );
-  const awayLine = moneylineOdds.find(
-    (l) => ((l.home_team === game.home_team && l.away_team === game.away_team) || (l.home_team === game.away_team && l.away_team === game.home_team)) && l.selection === game.away_team
-  );
+  const homeLine = gameLines.find((l) => l.team_side === 'home');
+  const awayLine = gameLines.find((l) => l.team_side === 'away');
 
   const lines: string[] = [];
   lines.push(`**${game.away_team} @ ${game.home_team}** — semana ${week}, temporada ${season}.`);
@@ -152,7 +159,13 @@ export async function answerMatchupQuestion(question: string, now: Date = new Da
 
         if (pos === 'QB') {
           const proj = projectPassYards(seasonStats, pid, week, opponent, defFactors, wx.passMult);
-          const line = propOdds.find((l) => l.player_name === name && l.market_type === 'player_passing_yards');
+          const line = propOdds.find(
+            (l) =>
+              l.player_name === name &&
+              l.market_type === 'player_passing_yards' &&
+              ((l.home?.abbreviation === game.home_team && l.away?.abbreviation === game.away_team) ||
+                (l.home?.abbreviation === game.away_team && l.away?.abbreviation === game.home_team))
+          );
           if (proj && line?.line !== undefined) {
             const p = probOverLine(proj, line.line);
             const ev = evaluateEdge(p, 0.5);
@@ -163,7 +176,13 @@ export async function answerMatchupQuestion(question: string, now: Date = new Da
         }
         if (pos === 'RB') {
           const tdProj = projectAnytimeTd(seasonStats, pid, week, 'rush');
-          const line = propOdds.find((l) => l.player_name === name && l.market_type === 'anytime_touchdown_scorer');
+          const line = propOdds.find(
+            (l) =>
+              l.player_name === name &&
+              l.market_type === 'anytime_touchdown_scorer' &&
+              ((l.home?.abbreviation === game.home_team && l.away?.abbreviation === game.away_team) ||
+                (l.home?.abbreviation === game.away_team && l.away?.abbreviation === game.home_team))
+          );
           if (tdProj?.lambda !== undefined && line) {
             const p = poissonProbAtLeastOne(tdProj.lambda);
             const ev = evaluateEdge(p, 0.5);
