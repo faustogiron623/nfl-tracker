@@ -1,20 +1,16 @@
-// Feature de "pregunta libre sobre un partido" — textbox tipo chat.
+﻿// Feature de "pregunta libre sobre un partido" — textbox tipo chat.
 //
 // DECISIÓN DE DISEÑO (te la marco a Fausto): esto lo armé SIN LLM para
 // tenerlo funcionando hoy sin pedirte una cuenta más (Anthropic Console +
 // otra API key). El parseo de equipos es por diccionario de alias
 // (src/lib/teams.ts) y la respuesta se arma con templates igual que el
 // resto del playbook — sigue la misma filosofía de "cero LLM en
-// producción" que ya tenías. Si más adelante quieres que entienda
-// preguntas más abiertas ("¿y si llueve?", "dame tu favorito de la
-// semana"), ahí sí conviene una capa de LLM barato (Haiku) por encima de
-// estos mismos números — es un agregado pequeño, no un rediseño.
+// producción" que ya tenías.
 //
 // SAME-GAME PARLAY: no existe forma de calcular el precio combinado real
 // de un SGP sin el motor de correlación propio de cada book (no es un
 // dato público). Lo que se devuelve son las legs individuales con edge
-// positivo para que Fausto arme el SGP él mismo en el book — nunca un
-// numero de cuota combinada inventado.
+// positivo para que Fausto arme el SGP él mismo en el book.
 
 import { fetchAllGames, fetchInjuriesWeek, fetchPlayerStatsSeason, fetchTeamStatsSeason, NflverseGame } from '../ingest/nflverse';
 import { fetchMoneylineOdds, fetchPlayerProps, SharpApiPropsUnavailableError } from '../ingest/sharpapi';
@@ -47,7 +43,6 @@ function findMatchupGame(games: NflverseGame[], teamA: TeamInfo, teamB: TeamInfo
       `No encontré un partido programado entre ${teamA.name} y ${teamB.name} en la temporada ${season}.`
     );
   }
-  // el más cercano a hoy (puede ser el de esta semana, o el más reciente si ya se jugó)
   candidates.sort(
     (a, b) => Math.abs(new Date(a.gameday).getTime() - today.getTime()) - Math.abs(new Date(b.gameday).getTime() - today.getTime())
   );
@@ -98,11 +93,6 @@ export async function answerMatchupQuestion(question: string, now: Date = new Da
   const { adjustedEdge, breakdown } = applySituationalAdjustments(baseEdge, ctx);
   const modelHomeWinProb = edgeToHomeWinProb(adjustedEdge);
 
-  // l.home_team/l.away_team traen nombre completo ("Buffalo Bills"), no el
-  // código de nflverse; y l.selection cambia de formato según la casa
-  // ("BUF Bills" vs "Buffalo Bills"). Comparamos contra home.abbreviation/
-  // away.abbreviation (código real) y usamos team_side (consistente entre
-  // casas) para saber cuál línea es la del local y cuál la de la visita.
   const gameLines = moneylineOdds.filter(
     (l) =>
       l.market_type === 'moneyline' &&
@@ -143,12 +133,10 @@ export async function answerMatchupQuestion(question: string, now: Date = new Da
     lines.push('Factores que más pesaron: ' + topFactors.map((f) => f.label).join('; ') + '.');
   }
 
-  // Props del partido, para armar SGP
   try {
     const propOdds = await fetchPlayerProps(['pass_yards', 'rush_yards', 'anytime_td', 'rec_yards']);
     const defFactors = computeDefensiveFactors(teamStats, week);
     const wx = weatherMultipliers(game);
-    const propLines: string[] = [];
 
     for (const [team, opponent] of [[game.home_team, game.away_team], [game.away_team, game.home_team]] as const) {
       const playerIds = Array.from(new Set(seasonStats.filter((p) => p.team === team && p.week < week).map((p) => p.player_id)));
@@ -199,7 +187,6 @@ export async function answerMatchupQuestion(question: string, now: Date = new Da
         `Para armar un same-game parlay: estas son las legs con edge individual positivo (no calculo la cuota combinada — eso depende de la correlación interna del book, arma la combinación directamente ahí).`
       );
     }
-    void propLines;
   } catch (err) {
     if (err instanceof SharpApiPropsUnavailableError) {
       lines.push('(Props no disponibles en tu plan de SharpAPI todavía — este análisis es solo a nivel de equipo.)');

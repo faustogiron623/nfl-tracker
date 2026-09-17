@@ -1,4 +1,4 @@
-// Orquestador principal: implementa el flujo completo del playbook para
+﻿// Orquestador principal: implementa el flujo completo del playbook para
 // una semana dada. CERO llamadas a LLM en esta ruta — todo determinístico.
 
 import {
@@ -59,9 +59,6 @@ export interface GeneratedPortfolio {
   parlayBudgetCents: number;
 }
 
-// OJO: l.home_team/l.away_team traen el NOMBRE COMPLETO del equipo
-// ("Buffalo Bills"), no el código de nflverse ("BUF") — por eso el matching
-// va contra l.home.abbreviation/l.away.abbreviation, que sí es el código real.
 function findOddsLine(
   lines: SharpApiOddsLine[],
   homeTeam: string,
@@ -78,10 +75,6 @@ function findOddsLine(
   );
 }
 
-/**
- * Paso 1: genera los picks de moneyline calificados (equipos) para todos
- * los partidos de la semana.
- */
 async function buildMoneylinePicks(
   season: number,
   week: number,
@@ -120,9 +113,6 @@ async function buildMoneylinePicks(
     const { adjustedEdge, breakdown } = applySituationalAdjustments(baseEdge, ctx);
     const modelHomeWinProb = edgeToHomeWinProb(adjustedEdge);
 
-    // l.selection viene en formato distinto según la casa ("BUF Bills" en
-    // DraftKings vs "Buffalo Bills" en FanDuel) — usamos team_side, que es
-    // consistente entre casas, para saber cuál línea es la del local/visita.
     const homeLine = findOddsLine(
       moneylineOdds,
       game.home_team,
@@ -136,7 +126,7 @@ async function buildMoneylinePicks(
       (l) => l.market_type === 'moneyline' && l.team_side === 'away'
     );
 
-    if (!homeLine || !awayLine) continue; // sin odds de mercado no se puede calcular edge
+    if (!homeLine || !awayLine) continue;
 
     const { fairProbA: fairHome, fairProbB: fairAway } = deVigTwoWay(
       homeLine.odds_american,
@@ -181,11 +171,6 @@ async function buildMoneylinePicks(
   return picks.sort((a, b) => b.edgePct - a.edgePct);
 }
 
-/**
- * Paso 2: genera picks de props calificados. Devuelve [] si SharpAPI no
- * sirve props en el plan actual (no lanza, para no tumbar el análisis
- * completo — el caller decide cómo comunicar el degradado).
- */
 async function buildPropPicks(
   season: number,
   week: number,
@@ -234,7 +219,6 @@ async function buildPropPicks(
         const displayName = playerRows[0]?.player_display_name ?? playerId;
         const position = playerRows[0]?.position;
 
-        // Pass yards (QBs)
         if (position === 'QB') {
           const proj = projectPassYards(playerStats, playerId, week, opponent, defFactors, wx.passMult);
           if (proj) {
@@ -250,7 +234,6 @@ async function buildPropPicks(
           }
         }
 
-        // Rush yards + anytime TD (RBs)
         if (position === 'RB') {
           const proj = projectRushYards(playerStats, teamStats, playerId, team, week, opponent, defFactors, wx.rushMult);
           if (proj) {
@@ -276,7 +259,6 @@ async function buildPropPicks(
           }
         }
 
-        // Receiving yards + receptions + anytime TD (WRs)
         if (position === 'WR' || position === 'TE') {
           const proj = projectReceivingYards(playerStats, teamStats, playerId, team, week, opponent, defFactors, wx.passMult);
           if (proj) {
@@ -291,3 +273,164 @@ async function buildPropPicks(
             }
           }
           const tdProj = projectAnytimeTd(playerStats, playerId, week, 'rec');
+          if (tdProj) {
+            const line = findOddsLine(
+              propOdds,
+              game.home_team,
+              game.away_team,
+              (l) => l.player_name === displayName && l.market_type === 'anytime_touchdown_scorer'
+            );
+            if (line) maybeAddTdProp(picks, displayName, team, game.game_id, line, tdProj);
+          }
+        }
+      }
+    }
+  }
+
+  return { picks: picks.sort((a, b) => b.edgePct - a.edgePct), available: true, warning: null };
+}
+
+function maybeAddYardageProp(
+  picks: CandidatePick[],
+  marketType: MarketType,
+  playerName: string,
+  team: string,
+  gameId: string,
+  line: SharpApiOddsLine,
+  proj: ReturnType<typeof projectPassYards>,
+  opponent: string
+) {
+  if (!proj || line.line === undefined) return;
+  const modelProbOver = probOverLine(proj, line.line);
+  const impliedOverUnderPair = 0.5;
+  const fairProb = 100 / 110 / (100 / 110 + 100 / 110);
+  void impliedOverUnderPair;
+  const evalRes = evaluateEdge(modelProbOver, fairProb);
+  if (!evalRes.qualifies) return;
+
+  const marketLabels: Record<string, string> = {
+    pass_yards: 'Yardas de pase',
+    rush_yards: 'Yardas de carrera',
+    rec_yards: 'Yardas de recepción',
+  };
+
+  picks.push({
+    marketType,
+    selection: `${playerName} Over ${line.line} ${marketLabels[marketType]}`,
+    playerName,
+    team,
+    gameId,
+    line: line.line,
+    oddsAmerican: line.odds_american,
+    modelProb: modelProbOver,
+    fairProb,
+    edgePct: evalRes.edgePct,
+    reasoning: buildPropReasoning(playerName, marketLabels[marketType], line.line, proj.inputs, evalRes.edgePct, opponent),
+  });
+}
+
+function maybeAddTdProp(
+  picks: CandidatePick[],
+  playerName: string,
+  team: string,
+  gameId: string,
+  line: SharpApiOddsLine,
+  proj: { lambda?: number; inputs: Record<string, number> }
+) {
+  if (proj.lambda === undefined) return;
+  const modelProb = poissonProbAtLeastOne(proj.lambda);
+  const fairProb = 0.5;
+  const evalRes = evaluateEdge(modelProb, fairProb);
+  if (!evalRes.qualifies) return;
+
+  picks.push({
+    marketType: 'anytime_td',
+    selection: `${playerName} Anytime TD`,
+    playerName,
+    team,
+    gameId,
+    line: null,
+    oddsAmerican: line.odds_american,
+    modelProb,
+    fairProb,
+    edgePct: evalRes.edgePct,
+    reasoning: buildPropReasoning(playerName, 'TD en cualquier momento', null, proj.inputs, evalRes.edgePct, ''),
+  });
+}
+
+function allocatePortfolio(
+  picks: CandidatePick[],
+  portfolioType: PortfolioType,
+  totalBudgetCents: number,
+  maxPicks = 4
+): GeneratedPortfolio {
+  const selected = picks.slice(0, maxPicks);
+  const picksBudgetCents = Math.round(totalBudgetCents * 0.9);
+  const parlayBudgetCents = totalBudgetCents - picksBudgetCents;
+
+  const shares = waterFillAllocate(selected.map((p) => Math.max(p.edgePct, 0.1)));
+  const picksWithStake = selected.map((p, i) => ({
+    ...p,
+    stakeCents: Math.round(picksBudgetCents * shares[i]),
+  }));
+
+  const parlayCandidates: ParlayCandidate[] = picks
+    .filter((p) => !selected.includes(p) && p.edgePct > 0)
+    .map((p) => ({ id: p.selection, gameId: p.gameId, selection: p.selection, oddsAmerican: p.oddsAmerican, edgePct: p.edgePct }));
+
+  const parlayResult = selectParlay(parlayCandidates);
+
+  return {
+    portfolioType,
+    picks: picksWithStake,
+    parlay: parlayResult
+      ? { legs: parlayResult.legs, combinedOddsAmerican: parlayResult.combinedOddsAmerican, stakeCents: parlayBudgetCents }
+      : null,
+    totalBudgetCents,
+    picksBudgetCents,
+    parlayBudgetCents,
+  };
+}
+
+export async function analyzeWeek(
+  season: number,
+  week: number,
+  budgetCents: number
+): Promise<AnalyzeWeekResult> {
+  const games = await fetchGamesForWeek(season, week);
+  if (games.length === 0) {
+    throw new Error(`No se encontraron partidos para ${season} semana ${week} en nflverse.`);
+  }
+
+  const [ratings, moneylineOdds] = await Promise.all([
+    computeTeamRatings(season, week),
+    fetchMoneylineOdds(),
+  ]);
+
+  const teamOnlyPicks = await buildMoneylinePicks(season, week, games, ratings, moneylineOdds);
+  const { picks: propsOnlyPicks, available: propsAvailable, warning } = await buildPropPicks(
+    season,
+    week,
+    games
+  );
+
+  const mixedPicks = [...teamOnlyPicks, ...propsOnlyPicks].sort((a, b) => b.edgePct - a.edgePct);
+
+  const portfolios: GeneratedPortfolio[] = [
+    allocatePortfolio(teamOnlyPicks, 'team_only', budgetCents),
+    ...(propsAvailable ? [allocatePortfolio(propsOnlyPicks, 'props_only', budgetCents)] : []),
+    allocatePortfolio(mixedPicks, 'mixed', budgetCents),
+  ];
+
+  return {
+    season,
+    week,
+    games,
+    propsAvailable,
+    propsWarning: warning,
+    candidatesByType: { team_only: teamOnlyPicks, props_only: propsOnlyPicks },
+    portfolios,
+  };
+}
+
+export { americanToDecimal };
